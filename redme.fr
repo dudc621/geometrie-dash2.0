@@ -1,0 +1,631 @@
+import React, { useState, useEffect, useRef } from 'react';
+import {
+  Play, Pause, RotateCcw, Star, Crown, Zap, Trophy,
+  ShoppingBag, Settings, Volume2, Lock, Check
+} from 'lucide-react';
+
+const RhythmRushGame = () => {
+  // États UI
+  const [gameState, setGameState] = useState('menu');
+  const [score, setScore] = useState(0);
+  const [stars, setStars] = useState(0);
+  const [gems, setGems] = useState(100);
+  const [isPremium, setIsPremium] = useState(false);
+  const [selectedSkin, setSelectedSkin] = useState(0);
+  const [unlockedSkins, setUnlockedSkins] = useState([0]);
+  const [highScore, setHighScore] = useState(0);
+  const [rotation, setRotation] = useState(0);
+  const [particles, setParticles] = useState([]);
+  const [showPayment, setShowPayment] = useState(false);
+  const [selectedPayment, setSelectedPayment] = useState(null);
+
+  // Valeurs fréquemment mises à jour -> refs (évite les problèmes de closure dans RAF)
+  const playerYRef = useRef(300);
+  const playerVelocityRef = useRef(0);
+  const obstaclesRef = useRef([]);
+  const collectiblesRef = useRef([]);
+  const animationRef = useRef(null);
+
+  // Pour afficher / synchroniser quelques états UI
+  const [playerY, setPlayerY] = useState(playerYRef.current);
+  const [isJumping, setIsJumping] = useState(false);
+  const [gameSpeed, setGameSpeed] = useState(5);
+
+  const worlds = [
+    { name: 'Néon City', color: '#00ffff', bg: 'from-purple-900 to-blue-900', icon: '🌃' },
+    { name: 'Cyber Space', color: '#ff00ff', bg: 'from-pink-900 to-purple-900', icon: '🚀' },
+    { name: 'Electric Storm', color: '#ffff00', bg: 'from-yellow-900 to-orange-900', icon: '⚡' },
+    { name: 'Crystal Cavern', color: '#00ff00', bg: 'from-green-900 to-teal-900', icon: '💎' },
+    { name: 'Quantum Realm', color: '#ff0080', bg: 'from-red-900 to-pink-900', icon: '🌌' }
+  ];
+
+  const skins = [
+    { name: 'Cube Classic', price: 0, color: '#00ffff', shape: 'square', premium: false },
+    { name: 'Triangle Rush', price: 50, color: '#ff00ff', shape: 'triangle', premium: false },
+    { name: 'Circle Wave', price: 100, color: '#ffff00', shape: 'circle', premium: false },
+    { name: 'Diamond Elite', price: 200, color: '#00ff00', shape: 'diamond', premium: false },
+    { name: 'Star Legend', price: 500, color: '#ff6600', shape: 'star', premium: true },
+    { name: 'Hexagon Master', price: 300, color: '#ff0080', shape: 'hexagon', premium: false },
+    { name: 'Neon Flash', price: 1000, color: '#00ffaa', shape: 'flash', premium: true }
+  ];
+
+  const gemPacks = [
+    { gems: 100, price: '2.99€', bonus: 0 },
+    { gems: 500, price: '9.99€', bonus: 50 },
+    { gems: 1200, price: '19.99€', bonus: 200 },
+    { gems: 3000, price: '49.99€', bonus: 800 }
+  ];
+
+  const premiumPass = {
+    price: '9.99€/mois',
+    benefits: [
+      'Niveaux bonus exclusifs',
+      'Défis spéciaux quotidiens',
+      'Récompenses doublées',
+      'Skins premium',
+      'Sans publicité'
+    ]
+  };
+
+  // Boucle de jeu (raf)
+  useEffect(() => {
+    const gravity = 0.8;
+
+    const gameLoop = () => {
+      // intégration simple de la physique
+      playerVelocityRef.current += gravity;
+      playerYRef.current += playerVelocityRef.current;
+
+      if (playerYRef.current >= 300) {
+        playerYRef.current = 300;
+        playerVelocityRef.current = 0;
+        if (isJumping) setIsJumping(false);
+      }
+
+      // rotation esthétique
+      setRotation(r => (r + 5) % 360);
+
+      // obstacles
+      obstaclesRef.current = obstaclesRef.current
+        .map(o => ({ ...o, x: o.x - gameSpeed }))
+        .filter(o => o.x > -50);
+
+      if (Math.random() < 0.02) {
+        const types = ['spike', 'wall', 'gap'];
+        obstaclesRef.current.push({
+          x: 800,
+          y: 300,
+          type: types[Math.floor(Math.random() * types.length)],
+          width: 40,
+          height: Math.random() > 0.5 ? 40 : 80
+        });
+      }
+
+      // collectibles
+      collectiblesRef.current = collectiblesRef.current
+        .map(c => ({ ...c, x: c.x - gameSpeed }))
+        .filter(c => c.x > -30);
+
+      if (Math.random() < 0.015) {
+        collectiblesRef.current.push({
+          x: 800,
+          y: Math.random() * 200 + 100,
+          type: Math.random() > 0.8 ? 'gem' : 'star'
+        });
+      }
+
+      // collisions obstacles (simple AABB approximatif)
+      for (let o of obstaclesRef.current) {
+        if (o.x < 150 && o.x > 50 && playerYRef.current + 40 > o.y - o.height && playerYRef.current < o.y) {
+          // game over
+          setGameState('gameOver');
+          setHighScore(h => (score > h ? score : h));
+          cancelAnimationFrame(animationRef.current);
+          animationRef.current = null;
+          return;
+        }
+      }
+
+      // collecte
+      const remaining = [];
+      for (let c of collectiblesRef.current) {
+        if (c.x < 150 && c.x > 50 && Math.abs(playerYRef.current + 20 - c.y) < 30) {
+          if (c.type === 'star') {
+            setStars(s => s + 1);
+            setScore(s => s + 10);
+          } else {
+            setGems(g => g + 1);
+            setScore(s => s + 5);
+          }
+          createParticles(c.x, c.y);
+        } else {
+          remaining.push(c);
+        }
+      }
+      collectiblesRef.current = remaining;
+
+      // progression score
+      setScore(s => s + 1);
+
+      // synchroniser les états visibles
+      setPlayerY(playerYRef.current);
+      // met à jour obstacles/collectibles visibles si besoin (ici on garde refs,
+      // mais tu peux exposer en state si tu dois renderer des éléments dynamiques)
+      animationRef.current = requestAnimationFrame(gameLoop);
+    };
+
+    if (gameState === 'playing') {
+      // initialisation
+      playerYRef.current = 300;
+      playerVelocityRef.current = 0;
+      obstaclesRef.current = [];
+      collectiblesRef.current = [];
+      setScore(0);
+      setRotation(0);
+      setParticles([]);
+      animationRef.current = requestAnimationFrame(gameLoop);
+    }
+
+    return () => {
+      if (animationRef.current) {
+        cancelAnimationFrame(animationRef.current);
+        animationRef.current = null;
+      }
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [gameState, gameSpeed, isJumping, score]);
+
+  // Création particules visuelles simples
+  const createParticles = (x, y) => {
+    const newParticles = Array.from({ length: 8 }, (_, i) => ({
+      id: Date.now() + i,
+      x,
+      y,
+      vx: Math.cos((i * Math.PI) / 4) * 3,
+      vy: Math.sin((i * Math.PI) / 4) * 3
+    }));
+    setParticles(p => [...p, ...newParticles]);
+    setTimeout(() => {
+      setParticles(p => p.filter(pt => !newParticles.find(np => np.id === pt.id)));
+    }, 500);
+  };
+
+  const jump = () => {
+    if (!isJumping && playerYRef.current >= 300) {
+      playerVelocityRef.current = -15;
+      setIsJumping(true);
+    }
+  };
+
+  const startGame = () => {
+    // reset
+    playerYRef.current = 300;
+    playerVelocityRef.current = 0;
+    obstaclesRef.current = [];
+    collectiblesRef.current = [];
+    setScore(0);
+    setRotation(0);
+    setParticles([]);
+    setGameState('playing');
+    setIsJumping(false);
+  };
+
+  const gameOver = () => {
+    setGameState('gameOver');
+    setHighScore(h => (score > h ? score : h));
+    if (animationRef.current) {
+      cancelAnimationFrame(animationRef.current);
+      animationRef.current = null;
+    }
+  };
+
+  const buySkin = (index) => {
+    const skin = skins[index];
+    if (!skin) return;
+    if (skin.premium && !isPremium) {
+      alert('Ce skin nécessite le Premium Pass !');
+      return;
+    }
+    if (gems >= skin.price && !unlockedSkins.includes(index)) {
+      setGems(g => g - skin.price);
+      setUnlockedSkins(s => [...s, index]);
+      alert(`${skin.name} débloqué !`);
+    }
+  };
+
+  const buyGemPack = (pack) => {
+    setSelectedPayment({ type: 'gems', pack });
+    setShowPayment(true);
+  };
+
+  const buyPremium = () => {
+    setSelectedPayment({ type: 'premium' });
+    setShowPayment(true);
+  };
+
+  const confirmPurchase = () => {
+    if (!selectedPayment) return;
+    if (selectedPayment.type === 'gems' && selectedPayment.pack) {
+      setGems(g => g + selectedPayment.pack.gems + (selectedPayment.pack.bonus || 0));
+      alert(`${selectedPayment.pack.gems + (selectedPayment.pack.bonus || 0)} gemmes ajoutées !`);
+    } else if (selectedPayment.type === 'premium') {
+      setIsPremium(true);
+      alert('Premium Pass activé ! Profitez de votre contenu exclusif.');
+    }
+    setShowPayment(false);
+    setSelectedPayment(null);
+  };
+
+  const renderPlayer = () => {
+    const skin = skins[selectedSkin] || skins[0];
+    const baseStyle = {
+      position: 'absolute',
+      left: '100px',
+      top: `${playerY}px`,
+      width: '40px',
+      height: '40px',
+      transform: `rotate(${rotation}deg)`,
+      transition: 'top 0.05s linear'
+    };
+    const colorStyle = {
+      backgroundColor: skin.color,
+      boxShadow: `0 0 20px ${skin.color}`
+    };
+
+    switch (skin.shape) {
+      case 'square':
+        return <div style={{ ...baseStyle, ...colorStyle }} className="border-4" />;
+      case 'circle':
+        return <div style={{ ...baseStyle, ...colorStyle }} className="rounded-full" />;
+      case 'triangle':
+        return (
+          <div style={baseStyle}>
+            <div
+              style={{
+                width: 0,
+                height: 0,
+                borderLeft: '20px solid transparent',
+                borderRight: '20px solid transparent',
+                borderBottom: `40px solid ${skin.color}`,
+                filter: `drop-shadow(0 0 10px ${skin.color})`
+              }}
+            />
+          </div>
+        );
+      case 'diamond':
+        return (
+          <div style={baseStyle}>
+            <div
+              style={{
+                width: '40px',
+                height: '40px',
+                backgroundColor: skin.color,
+                transform: 'rotate(45deg)',
+                boxShadow: `0 0 20px ${skin.color}`
+              }}
+            />
+          </div>
+        );
+      case 'star':
+        return <div style={baseStyle} className="text-4xl">⭐</div>;
+      case 'hexagon':
+        return <div style={baseStyle} className="text-4xl">⬡</div>;
+      default:
+        return <div style={{ ...baseStyle, ...colorStyle }} className="border-4" />;
+    }
+  };
+
+  // ---------- UI Renders ----------
+  // Paiement modal
+  if (showPayment && selectedPayment) {
+    return (
+      <div className="w-full h-screen bg-gradient-to-br from-gray-900 to-black text-white flex items-center justify-center p-4">
+        <div className="bg-gray-800 rounded-2xl p-8 max-w-md w-full border-4 border-purple-500 shadow-2xl">
+          <h2 className="text-3xl font-bold mb-6 text-center">💳 Paiement Sécurisé</h2>
+
+          {selectedPayment.type === 'gems' ? (
+            <div className="space-y-4">
+              <div className="bg-gradient-to-r from-purple-600 to-pink-600 p-6 rounded-xl text-center">
+                <div className="text-5xl mb-2">💎</div>
+                <div className="text-3xl font-bold">{selectedPayment.pack.gems + (selectedPayment.pack.bonus || 0)} Gemmes</div>
+                <div className="text-xl mt-2">{selectedPayment.pack.price}</div>
+              </div>
+            </div>
+          ) : (
+            <div className="space-y-4">
+              <div className="bg-gradient-to-r from-yellow-600 to-orange-600 p-6 rounded-xl text-center">
+                <Crown className="w-16 h-16 mx-auto mb-2" />
+                <div className="text-3xl font-bold">Premium Pass</div>
+                <div className="text-xl mt-2">{premiumPass.price}</div>
+              </div>
+              <div className="bg-gray-700 p-4 rounded-xl">
+                <h3 className="font-bold mb-2">Avantages inclus:</h3>
+                {premiumPass.benefits.map((b, i) => (
+                  <div key={i} className="flex items-center gap-2 mb-1">
+                    <Check className="w-4 h-4 text-green-400" />
+                    <span className="text-sm">{b}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          <div className="mt-6 space-y-3">
+            <input type="text" placeholder="Numéro de carte" className="w-full p-3 rounded-lg bg-gray-700 border-2 border-gray-600" />
+            <div className="flex gap-3">
+              <input type="text" placeholder="MM/AA" className="w-1/2 p-3 rounded-lg bg-gray-700 border-2 border-gray-600" />
+              <input type="text" placeholder="CVV" className="w-1/2 p-3 rounded-lg bg-gray-700 border-2 border-gray-600" />
+            </div>
+
+            <button onClick={confirmPurchase} className="w-full bg-gradient-to-r from-green-500 to-green-600 p-4 rounded-xl font-bold text-xl hover:scale-105 transition-transform">
+              ✓ Confirmer l'achat
+            </button>
+
+            <button onClick={() => { setShowPayment(false); setSelectedPayment(null); }} className="w-full bg-gray-700 p-3 rounded-xl hover:bg-gray-600 transition-colors">
+              Annuler
+            </button>
+          </div>
+
+          <div className="mt-4 text-xs text-gray-400 text-center">
+            🔒 Paiement sécurisé SSL • Remboursement sous 14 jours
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // Boutique
+  if (gameState === 'shop') {
+    return (
+      <div className="w-full h-screen bg-gradient-to-br from-purple-900 via-blue-900 to-black text-white overflow-auto p-4">
+        <div className="max-w-6xl mx-auto">
+          <div className="flex justify-between items-center mb-6">
+            <h1 className="text-4xl font-bold">🛍️ Boutique</h1>
+            <button onClick={() => setGameState('menu')} className="bg-gray-700 px-6 py-2 rounded-xl hover:bg-gray-600">Retour</button>
+          </div>
+
+          <div className="bg-gray-800 p-4 rounded-xl mb-6 flex justify-around">
+            <div className="text-center">
+              <Star className="w-8 h-8 mx-auto text-yellow-400 mb-1" />
+              <div className="text-2xl font-bold">{stars}</div>
+              <div className="text-sm text-gray-400">Étoiles</div>
+            </div>
+            <div className="text-center">
+              <Zap className="w-8 h-8 mx-auto text-purple-400 mb-1" />
+              <div className="text-2xl font-bold">{gems}</div>
+              <div className="text-sm text-gray-400">Gemmes</div>
+            </div>
+            <div className="text-center">
+              <Trophy className="w-8 h-8 mx-auto text-yellow-400 mb-1" />
+              <div className="text-2xl font-bold">{highScore}</div>
+              <div className="text-sm text-gray-400">Record</div>
+            </div>
+          </div>
+
+          <div className="bg-gradient-to-r from-yellow-600 to-orange-600 p-6 rounded-2xl mb-6 border-4 border-yellow-400">
+            <div className="flex items-center justify-between mb-4">
+              <div className="flex items-center gap-3">
+                <Crown className="w-12 h-12" />
+                <div>
+                  <h2 className="text-3xl font-bold">Premium Pass</h2>
+                  <p className="text-lg">{premiumPass.price}</p>
+                </div>
+              </div>
+              {!isPremium ? (
+                <button onClick={buyPremium} className="bg-white text-black px-8 py-3 rounded-xl font-bold hover:scale-105 transition-transform">Acheter</button>
+              ) : (
+                <div className="bg-green-500 px-6 py-3 rounded-xl font-bold flex items-center gap-2"><Check className="w-6 h-6" /> Actif</div>
+              )}
+            </div>
+
+            <div className="grid grid-cols-2 gap-2">
+              {premiumPass.benefits.map((b, i) => (
+                <div key={i} className="flex items-center gap-2 bg-black bg-opacity-30 p-2 rounded-lg">
+                  <Check className="w-4 h-4" />
+                  <span className="text-sm">{b}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          <h2 className="text-2xl font-bold mb-4">💎 Packs de Gemmes</h2>
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+            {gemPacks.map((pack, i) => (
+              <div key={i} className="bg-gradient-to-br from-purple-600 to-pink-600 p-6 rounded-xl text-center hover:scale-105 transition-transform cursor-pointer" onClick={() => buyGemPack(pack)}>
+                <div className="text-4xl mb-2">💎</div>
+                <div className="text-2xl font-bold">{pack.gems}</div>
+                {pack.bonus > 0 && <div className="bg-yellow-400 text-black text-xs px-2 py-1 rounded-full mt-1 font-bold">+{pack.bonus} BONUS</div>}
+                <div className="text-xl mt-3 font-bold">{pack.price}</div>
+              </div>
+            ))}
+          </div>
+
+          <div className="flex gap-4 mb-6">
+            <button onClick={() => setGameState('customize')} className="flex-1 bg-blue-600 p-4 rounded-xl font-bold hover:bg-blue-500 transition-colors">🎨 Personnalisation</button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // Personnalisation
+  if (gameState === 'customize') {
+    return (
+      <div className="w-full h-screen bg-gradient-to-br from-blue-900 via-purple-900 to-black text-white overflow-auto p-4">
+        <div className="max-w-6xl mx-auto">
+          <div className="flex justify-between items-center mb-6">
+            <h1 className="text-4xl font-bold">🎨 Personnalisation</h1>
+            <button onClick={() => setGameState('menu')} className="bg-gray-700 px-6 py-2 rounded-xl hover:bg-gray-600">Retour</button>
+          </div>
+
+          <div className="bg-gray-800 p-4 rounded-xl mb-6">
+            <div className="text-center text-2xl font-bold mb-2">Gemmes: {gems} 💎</div>
+          </div>
+
+          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
+            {skins.map((skin, i) => {
+              const isUnlocked = unlockedSkins.includes(i);
+              const isSelected = selectedSkin === i;
+              const needsPremium = skin.premium && !isPremium;
+
+              return (
+                <div key={i} className={`bg-gray-800 p-6 rounded-xl border-4 transition-all cursor-pointer ${isSelected ? 'border-yellow-400 scale-105' : 'border-gray-700 hover:border-gray-500'}`} onClick={() => {
+                  if (isUnlocked && !needsPremium) setSelectedSkin(i);
+                  else if (!isUnlocked && !needsPremium) buySkin(i);
+                }}>
+                  <div className="flex justify-center mb-4 h-20 items-center">
+                    {skin.shape === 'square' && <div style={{ width: '60px', height: '60px', backgroundColor: skin.color, boxShadow: `0 0 20px ${skin.color}` }} />}
+                    {skin.shape === 'circle' && <div className="rounded-full" style={{ width: '60px', height: '60px', backgroundColor: skin.color, boxShadow: `0 0 20px ${skin.color}` }} />}
+                    {skin.shape === 'triangle' && <div style={{ width: 0, height: 0, borderLeft: '30px solid transparent', borderRight: '30px solid transparent', borderBottom: `60px solid ${skin.color}`, filter: `drop-shadow(0 0 10px ${skin.color})` }} />}
+                    {skin.shape === 'diamond' && <div style={{ width: '60px', height: '60px', backgroundColor: skin.color, transform: 'rotate(45deg)', boxShadow: `0 0 20px ${skin.color}` }} />}
+                    {(skin.shape === 'star' || skin.shape === 'flash') && <div className="text-6xl">⭐</div>}
+                    {skin.shape === 'hexagon' && <div className="text-6xl">⬡</div>}
+                  </div>
+
+                  <h3 className="font-bold text-center mb-2">{skin.name}</h3>
+
+                  {isSelected && <div className="bg-green-500 text-center py-2 rounded-lg font-bold">✓ Équipé</div>}
+
+                  {!isUnlocked && !isSelected && (
+                    <div className="text-center">
+                      {needsPremium ? (
+                        <div className="bg-yellow-600 py-2 rounded-lg font-bold flex items-center justify-center gap-2">
+                          <Crown className="w-4 h-4" /> Premium
+                        </div>
+                      ) : (
+                        <div className="bg-purple-600 py-2 rounded-lg font-bold">{skin.price} 💎</div>
+                      )}
+                    </div>
+                  )}
+
+                  {isUnlocked && !isSelected && !needsPremium && <div className="bg-blue-600 text-center py-2 rounded-lg font-bold hover:bg-blue-500">Équiper</div>}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // Menu principal
+  if (gameState === 'menu') {
+    return (
+      <div className="w-full h-screen bg-gradient-to-br from-purple-900 via-pink-900 to-blue-900 text-white flex items-center justify-center relative overflow-hidden">
+        <div className="absolute inset-0">
+          {[...Array(20)].map((_, i) => (
+            <div key={i} className="absolute rounded-full opacity-20" style={{
+              left: `${Math.random() * 100}%`,
+              top: `${Math.random() * 100}%`,
+              width: `${Math.random() * 100 + 50}px`,
+              height: `${Math.random() * 100 + 50}px`,
+              backgroundColor: ['#ff00ff', '#00ffff', '#ffff00'][i % 3],
+              animation: `float ${Math.random() * 3 + 2}s infinite ease-in-out`,
+              animationDelay: `${Math.random() * 2}s`
+            }} />
+          ))}
+        </div>
+
+        <style>{`
+          @keyframes float {
+            0%, 100% { transform: translateY(0px); }
+            50% { transform: translateY(-20px); }
+          }
+        `}</style>
+
+        <div className="relative z-10 text-center max-w-2xl p-8">
+          <div className="mb-8">
+            <h1 className="text-7xl font-bold mb-4 animate-pulse" style={{ textShadow: '0 0 30px #ff00ff' }}>RHYTHM RUSH</h1>
+            <p className="text-2xl text-cyan-300">Saute au rythme de la musique électronique !</p>
+          </div>
+
+          <div className="bg-black bg-opacity-50 p-6 rounded-2xl mb-6 backdrop-blur-sm">
+            <div className="flex justify-around mb-4">
+              <div>
+                <Trophy className="w-8 h-8 mx-auto text-yellow-400 mb-2" />
+                <div className="text-xl font-bold">{highScore}</div>
+                <div className="text-sm text-gray-300">Record</div>
+              </div>
+              <div>
+                <Star className="w-8 h-8 mx-auto text-yellow-400 mb-2" />
+                <div className="text-xl font-bold">{stars}</div>
+                <div className="text-sm text-gray-300">Étoiles</div>
+              </div>
+              <div>
+                <Zap className="w-8 h-8 mx-auto text-purple-400 mb-2" />
+                <div className="text-xl font-bold">{gems}</div>
+                <div className="text-sm text-gray-300">Gemmes</div>
+              </div>
+            </div>
+          </div>
+
+          <div className="space-y-4">
+            <button onClick={startGame} className="w-full bg-gradient-to-r from-cyan-500 to-blue-500 px-12 py-6 rounded-2xl text-3xl font-bold transform hover:scale-105 transition-all shadow-2xl">
+              <Play className="inline mr-3" /> JOUER
+            </button>
+
+            <div className="grid grid-cols-2 gap-4">
+              <button onClick={() => setGameState('shop')} className="bg-gradient-to-r from-purple-600 to-pink-600 px-6 py-4 rounded-xl text-xl font-bold transform hover:scale-105 transition-all">
+                <ShoppingBag className="inline mr-2" /> Boutique
+              </button>
+
+              <button onClick={() => setGameState('customize')} className="bg-gradient-to-r from-green-600 to-teal-600 px-6 py-4 rounded-xl text-xl font-bold transform hover:scale-105 transition-all">
+                🎨 Skins
+              </button>
+            </div>
+
+            {!isPremium && (
+              <button onClick={buyPremium} className="w-full bg-gradient-to-r from-yellow-600 to-orange-600 px-6 py-4 rounded-xl font-bold transform hover:scale-105 transition-all flex items-center justify-center gap-2">
+                <Crown className="w-6 h-6" /> Obtenir le Premium Pass
+              </button>
+            )}
+          </div>
+
+          <div className="mt-8 text-sm text-gray-400">
+            <p>🏆 Classement mondial • 🎯 Défis hebdomadaires • ⚡ Événements limités</p>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // Ecran Game Over
+  if (gameState === 'gameOver') {
+    return (
+      <div className="w-full h-screen bg-gradient-to-br from-red-900 to-black text-white flex items-center justify-center">
+        <div className="text-center max-w-md bg-gray-900 p-8 rounded-3xl border-4 border-red-500">
+          <h1 className="text-5xl font-bold mb-6 text-red-500">GAME OVER</h1>
+
+          <div className="bg-black bg-opacity-50 p-6 rounded-xl mb-6">
+            <div className="text-4xl font-bold mb-2">{score}</div>
+            <div className="text-gray-400 mb-4">Score</div>
+            <div className="flex justify-around">
+              <div>
+                <Star className="w-6 h-6 mx-auto text-yellow-400 mb-1" />
+                <div className="font-bold">{stars}</div>
+              </div>
+              <div>
+                <Zap className="w-6 h-6 mx-auto text-purple-400 mb-1" />
+                <div className="font-bold">{gems}</div>
+              </div>
+            </div>
+          </div>
+
+          <div className="flex gap-4">
+            <button onClick={startGame} className="bg-green-600 px-6 py-3 rounded-xl font-bold">Rejouer</button>
+            <button onClick={() => setGameState('menu')} className="bg-gray-700 px-6 py-3 rounded-xl">Menu</button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // Fallback UI (normalement on n'y arrive pas car tous les états sont gérés)
+  return (
+    <div className="w-full h-screen flex items-center justify-center text-white">
+      <div>Chargement...</div>
+    </div>
+  );
+};
+
+export default RhythmRushGame;
